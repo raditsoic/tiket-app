@@ -56,7 +56,7 @@ def healthz():
 
 @app.get("/version")
 def version():
-    return APP_VERSION + "\n"
+    return APP_VERSION + "\ntest" 
 
 
 @app.get("/")
