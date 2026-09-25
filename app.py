@@ -22,6 +22,9 @@ import psycopg2
 from flask import Flask
 
 DB_HOST = os.environ.get("DB_HOST", "db.tiket.lab")
+# Baked into the image at build time by the pipeline
+# (--build-arg APP_VERSION=<branch>-<build>); "dev" for manual builds.
+APP_VERSION = os.environ.get("APP_VERSION", "dev")
 DSN = (
     f"dbname={os.environ['DB_NAME']}"
     f" user={os.environ['DB_USER']}"
@@ -49,6 +52,11 @@ def healthz():
     finally:
         conn.close()
     return "ok\n", 200
+
+
+@app.get("/version")
+def version():
+    return APP_VERSION + "\n"
 
 
 @app.get("/")

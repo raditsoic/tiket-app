@@ -7,7 +7,7 @@ pipeline {
         stage('Build image') {
             steps {
                 sh 'echo "$(echo "$BRANCH_NAME" | tr "/" "-")-$BUILD_NUMBER" > .image-tag'
-                sh 'docker build -t "localhost:5000/tiket-app:$(cat .image-tag)" .'
+                sh 'docker build --build-arg APP_VERSION="$(cat .image-tag)" -t "localhost:5000/tiket-app:$(cat .image-tag)" .'
             }
         }
         stage('Push to registry') {

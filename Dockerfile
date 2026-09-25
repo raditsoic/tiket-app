@@ -12,6 +12,11 @@ RUN pip install --no-cache-dir \
         gunicorn==23.0.0 \
         psycopg2-binary==2.9.10
 
+
+# Version injected by the pipeline (--build-arg APP_VERSION=<branch>-<build>),
+# served by the /version endpoint. "dev" fallback for manual builds.
+ARG APP_VERSION=dev
+ENV APP_VERSION=${APP_VERSION}
 WORKDIR /app
 COPY app.py .
 
