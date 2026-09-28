@@ -1,6 +1,6 @@
 // tiket-app pipeline: build -> push to the lab registry; main also rolls
-// the container on web1/web2 over SSH (deploy.sh, same container config
-// as the Ansible playbook).
+// the k3s Deployment on the lab cluster onto the exact build tag (kubectl
+// set image + rollout status on lb over SSH — see the lb repo README, CI/CD).
 pipeline {
     agent any
     stages {
@@ -27,7 +27,7 @@ fi
                 }
             }
         }
-        stage('Deploy to web VMs') {
+        stage('Deploy to k3s') {
             when { branch 'main' }
             steps {
                 withCredentials([file(credentialsId: 'tiket-deploy-key', variable: 'DEPLOY_KEY')]) {
@@ -35,20 +35,22 @@ fi
 set -euo pipefail
 TAG=$(cat .image-tag)
 chmod 600 "$DEPLOY_KEY"
-for pair in 192.168.56.11:8081 192.168.56.12:8082; do
-  host=${pair%%:*}
-  port=${pair##*:}
-  ssh -i "$DEPLOY_KEY" -o IdentitiesOnly=yes -o StrictHostKeyChecking=no \
-      -o UserKnownHostsFile=/dev/null \
-      "vagrant@$host" "sudo bash -s -- $TAG" < deploy.sh
-  ok=0
-  for i in $(seq 1 30); do
-    if curl -fsS "http://host.docker.internal:$port/healthz" >/dev/null; then ok=1; break; fi
-    sleep 2
-  done
-  [ "$ok" = 1 ] || { echo "health check failed on $host"; exit 1; }
-  echo "$host healthy with $TAG"
-done
+ssh_opts=(-i "$DEPLOY_KEY" -o IdentitiesOnly=yes -o StrictHostKeyChecking=no
+          -o UserKnownHostsFile=/dev/null)
+lb=host.docker.internal   # jenkins container -> host loopback -> NAT 2210 -> lb:22
+# Image prefix (registry host) is read from the live Deployment so CI tracks
+# lb's group_vars registry_host instead of duplicating it.
+img=$(ssh "${ssh_opts[@]}" -p 2210 root@"$lb" \
+  "kubectl get deployment tiket-app -o jsonpath='{.spec.template.spec.containers[0].image}'")
+ssh "${ssh_opts[@]}" -p 2210 root@"$lb" \
+  "kubectl set image deployment/tiket-app tiket-app=${img%:*}:$TAG"
+ssh "${ssh_opts[@]}" -p 2210 root@"$lb" \
+  "kubectl rollout status deployment/tiket-app --timeout=180s"
+# Health through the real entry point (lb:80 = Traefik ingress). The jenkins
+# container has no curl, so this runs on lb; /version serves APP_VERSION.
+ssh "${ssh_opts[@]}" -p 2210 root@"$lb" "curl -fsS http://127.0.0.1/version" \
+  | grep -qF "$TAG" || { echo "/version did not report $TAG"; exit 1; }
+echo "cluster rolled to $TAG"
 '''
                 }
             }

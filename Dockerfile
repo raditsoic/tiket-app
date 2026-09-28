@@ -1,6 +1,7 @@
 # The app image: Flask + gunicorn + psycopg2, config via env only.
 # Built and pushed by the Jenkins pipeline (Jenkinsfile) on every push;
-# on main it also deploys to web1/web2. Manual fallback (repo root is the
+# on main it also rolls the k3s Deployment onto the exact build tag
+# (see the lb repo README, CI/CD). Manual fallback (repo root is the
 # build context now — no app/ path):
 #   docker build -t localhost:5000/tiket-app:<tag> .
 #   docker login localhost:5000 && docker push localhost:5000/tiket-app:<tag>
