@@ -1,6 +1,7 @@
-// tiket-app pipeline: build -> push to the lab registry; main also rolls
-// the k3s Deployment on the lab cluster onto the exact build tag (kubectl
-// set image + rollout status on lb over SSH — see the lb repo README, CI/CD).
+// tiket-app pipeline: build -> push to the lab registry. On main it also
+// rolls the cluster by committing the new image tag to Raditsoic/tiket-k8s
+// (the GitOps repo) — ArgoCD deploys from there. SSH to cp is read-only
+// verification (rollout wait + health curl) — see the k8s repo README, CI/CD.
 pipeline {
     agent any
     stages {
@@ -27,30 +28,45 @@ fi
                 }
             }
         }
-        stage('Deploy to k3s') {
+        stage('Deploy to k3s (GitOps)') {
             when { branch 'main' }
             steps {
-                withCredentials([file(credentialsId: 'tiket-deploy-key', variable: 'DEPLOY_KEY')]) {
+                withCredentials([
+                    sshUserPrivateKey(credentialsId: 'tiket-manifests-deploy-key', keyFileVariable: 'GIT_KEY'),
+                    file(credentialsId: 'tiket-deploy-key', variable: 'DEPLOY_KEY')
+                ]) {
                     sh '''#!/usr/bin/env bash
 set -euo pipefail
 TAG=$(cat .image-tag)
-chmod 600 "$DEPLOY_KEY"
-ssh_opts=(-i "$DEPLOY_KEY" -o IdentitiesOnly=yes -o StrictHostKeyChecking=no
-          -o UserKnownHostsFile=/dev/null)
-lb=host.docker.internal   # jenkins container -> host loopback -> NAT 2210 -> lb:22
-# Image prefix (registry host) is read from the live Deployment so CI tracks
-# lb's group_vars registry_host instead of duplicating it.
-img=$(ssh "${ssh_opts[@]}" -p 2210 root@"$lb" \
-  "kubectl get deployment tiket-app -o jsonpath='{.spec.template.spec.containers[0].image}'")
-ssh "${ssh_opts[@]}" -p 2210 root@"$lb" \
-  "kubectl set image deployment/tiket-app tiket-app=${img%:*}:$TAG"
-ssh "${ssh_opts[@]}" -p 2210 root@"$lb" \
-  "kubectl rollout status deployment/tiket-app --timeout=180s"
-# Health through the real entry point (lb:80 = Traefik ingress). The jenkins
-# container has no curl, so this runs on lb; /version serves APP_VERSION.
-ssh "${ssh_opts[@]}" -p 2210 root@"$lb" "curl -fsS http://127.0.0.1/version" \
+export GIT_SSH_COMMAND="ssh -i $GIT_KEY -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+rm -rf manifests
+git clone --depth 1 git@github.com:Raditsoic/tiket-k8s.git manifests
+cd manifests
+git config user.email "jenkins@tiket.lab"
+git config user.name "tiket-ci"
+# Roll only the tag; the registry prefix lives in the repo.
+sed -i "s#tiket-app:.*#tiket-app:$TAG#" tiket/deployment.yaml
+grep -q "tiket-app:$TAG" tiket/deployment.yaml
+git commit -am "roll tiket-app to $TAG"
+git push origin main
+# The git push IS the deploy. Below is read-only verification: ArgoCD
+# polls the repo (~3 min), so wait until the live Deployment carries the
+# tag, then follow the rollout and check the entry point.
+cp=host.docker.internal
+ssh_opts=(-i "$DEPLOY_KEY" -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null)
+img=""
+for i in $(seq 1 60); do
+  img=$(ssh "${ssh_opts[@]}" -p 2210 root@"$cp" \
+    "kubectl get deployment tiket-app -o jsonpath='{.spec.template.spec.containers[0].image}'")
+  [ "${img##*:}" = "$TAG" ] && break
+  sleep 10
+done
+[ "${img##*:}" = "$TAG" ] || { echo "deployment never picked up $TAG (ArgoCD sync timeout)"; exit 1; }
+ssh "${ssh_opts[@]}" -p 2210 root@"$cp" \
+  "kubectl rollout status deployment/tiket-app --timeout=300s"
+ssh "${ssh_opts[@]}" -p 2210 root@"$cp" "curl -fsS http://127.0.0.1/version" \
   | grep -qF "$TAG" || { echo "/version did not report $TAG"; exit 1; }
-echo "cluster rolled to $TAG"
+echo "cluster rolled to $TAG (via ArgoCD)"
 '''
                 }
             }
