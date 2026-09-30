@@ -44,9 +44,9 @@ git clone --depth 1 git@github.com:Raditsoic/tiket-k8s.git manifests
 cd manifests
 git config user.email "jenkins@tiket.lab"
 git config user.name "tiket-ci"
-# Roll only the tag; the registry prefix lives in the repo.
-sed -i "s#tiket-app:.*#tiket-app:$TAG#" tiket/deployment.yaml
-grep -q "tiket-app:$TAG" tiket/deployment.yaml
+# Roll only the tag (image.tag); the registry prefix lives in values.yaml.
+sed -i "s#tag: \".*\"#tag: \"$TAG\"#" tiket/values.yaml
+grep -q "tag: \"$TAG\"" tiket/values.yaml
 git commit -am "roll tiket-app to $TAG"
 git push origin main
 # The git push IS the deploy. Below is read-only verification: ArgoCD
