@@ -45,7 +45,8 @@ cd manifests
 git config user.email "jenkins@tiket.lab"
 git config user.name "tiket-ci"
 # Roll only the tag (image.tag); the registry prefix lives in values.yaml.
-sed -i "s#tag: \".*\"#tag: \"$TAG\"#" tiket/values.yaml
+# The pattern accepts a quoted or bare tag and always writes it quoted.
+sed -i "s#tag: .*#tag: \"$TAG\"#" tiket/values.yaml
 grep -q "tag: \"$TAG\"" tiket/values.yaml
 git commit -am "roll tiket-app to $TAG"
 git push origin main
