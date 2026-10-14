@@ -7,8 +7,14 @@ pipeline {
     stages {
         stage('Build image') {
             steps {
-                sh 'echo "$(echo "$BRANCH_NAME" | tr "/" "-")-$BUILD_NUMBER" > .image-tag'
-                sh 'docker build --build-arg APP_VERSION="$(cat .image-tag)" -t "registry.spacetrek.xyz/tiket-app:$(cat .image-tag)" .'
+                sh '''
+# Sanitize branch name: replace slashes with hyphens, strip leading/trailing hyphens/dots
+BRANCH_NAME=${BRANCH_NAME:-main}
+BRANCH_NAME=$(echo "$BRANCH_NAME" | tr "/" "-" | sed 's/^[.-]*//;s/[.-]*$//')
+# Use "main" as fallback if branch name is empty (e.g., in PRs without a branch)
+echo "${BRANCH_NAME}-${BUILD_NUMBER}" > .image-tag
+docker build --build-arg APP_VERSION="$(cat .image-tag)" -t "registry.spacetrek.xyz/tiket-app:$(cat .image-tag)" .
+'''
             }
         }
         stage('Push to registry') {
@@ -29,7 +35,11 @@ fi
             }
         }
         stage('Deploy to k3s (GitOps)') {
-            when { branch 'main' }
+            when {
+                expression {
+                    env.GIT_BRANCH == 'origin/main'
+                }
+            }
             steps {
                 withCredentials([
                     sshUserPrivateKey(credentialsId: 'tiket-manifests-deploy-key', keyFileVariable: 'GIT_KEY'),
