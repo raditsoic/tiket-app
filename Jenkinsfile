@@ -8,21 +8,21 @@ pipeline {
         stage('Build image') {
             steps {
                 sh 'echo "$(echo "$BRANCH_NAME" | tr "/" "-")-$BUILD_NUMBER" > .image-tag'
-                sh 'docker build --build-arg APP_VERSION="$(cat .image-tag)" -t "localhost:5000/tiket-app:$(cat .image-tag)" .'
+                sh 'docker build --build-arg APP_VERSION="$(cat .image-tag)" -t "registry.spacetrek.xyz/tiket-app:$(cat .image-tag)" .'
             }
         }
         stage('Push to registry') {
             steps {
-                withCredentials([usernamePassword(credentialsId: 'tiket-registry',
+                withCredentials([usernamePassword(credentialsId: 'artifact-registry',
                                                   usernameVariable: 'REG_USER',
                                                   passwordVariable: 'REG_PASS')]) {
                     sh '''#!/usr/bin/env bash
 set -e
-echo "$REG_PASS" | docker login localhost:5000 -u "$REG_USER" --password-stdin
-docker push "localhost:5000/tiket-app:$(cat .image-tag)"
+echo "$REG_PASS" | docker login registry.spacetrek.xyz -u "$REG_USER" --password-stdin
+docker push "registry.spacetrek.xyz/tiket-app:$(cat .image-tag)"
 if [ "$BRANCH_NAME" = "main" ]; then
-  docker tag "localhost:5000/tiket-app:$(cat .image-tag)" localhost:5000/tiket-app:latest
-  docker push localhost:5000/tiket-app:latest
+  docker tag "registry.spacetrek.xyz/tiket-app:$(cat .image-tag)" registry.spacetrek.xyz/tiket-app:latest
+  docker push registry.spacetrek.xyz/tiket-app:latest
 fi
 '''
                 }
@@ -40,19 +40,26 @@ set -euo pipefail
 TAG=$(cat .image-tag)
 export GIT_SSH_COMMAND="ssh -i $GIT_KEY -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
 rm -rf manifests
-git clone --depth 1 git@github.com:Raditsoic/tiket-k8s.git manifests
+git clone --depth 1 https://github.com/raditsoic/terraform-gcp-gitops.git manifests
 cd manifests
 git config user.email "jenkins@tiket.lab"
 git config user.name "tiket-ci"
-# Roll only the tag (image.tag); the registry prefix lives in values.yaml.
-# The pattern accepts a quoted or bare tag and always writes it quoted.
-sed -i "s#tag: .*#tag: \"$TAG\"#" tiket/values.yaml
-grep -q "tag: \"$TAG\"" tiket/values.yaml
+
+# Update image registry, repository, and tag in values.yaml
+sed -i "s#registry: .*#registry: registry.spacetrek.xyz#" apps/charts/tiket/values.yaml
+sed -i "s#repository: .*#repository: tiket-app#" apps/charts/tiket/values.yaml
+sed -i "s#tag: .*#tag: \"$TAG\"#" apps/charts/tiket/values.yaml
+
+grep -q "registry: registry.spacetrek.xyz" apps/charts/tiket/values.yaml
+grep -q "repository: tiket-app" apps/charts/tiket/values.yaml
+grep -q "tag: \"$TAG\"" apps/charts/tiket/values.yaml
+
 git commit -am "roll tiket-app to $TAG"
 git push origin main
+
 # The git push IS the deploy. Below is read-only verification: ArgoCD
 # polls the repo (~3 min), so wait until the live Deployment carries the
-# tag, then follow the rollout and check the entry point.
+# new image, then follow the rollout and check the entry point.
 cp=host.docker.internal
 ssh_opts=(-i "$DEPLOY_KEY" -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null)
 img=""
@@ -75,7 +82,7 @@ echo "cluster rolled to $TAG (via ArgoCD)"
     }
     post {
         always {
-            sh 'docker rmi -f "localhost:5000/tiket-app:$(cat .image-tag)" >/dev/null 2>&1 || true'
+            sh 'docker rmi -f "registry.spacetrek.xyz/tiket-app:$(cat .image-tag)" >/dev/null 2>&1 || true'
         }
     }
 }
